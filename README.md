@@ -227,4 +227,4 @@ npm test
 
 ## Acknowledgements
 
-Developed as a Final Year Project at the Department of Computer Science / Software Engineering, _University name_.
+Developed as a Final Year Project at the Department of Computer Science / Software Engineering, ILMA UNIVERSITY KARACHI.
