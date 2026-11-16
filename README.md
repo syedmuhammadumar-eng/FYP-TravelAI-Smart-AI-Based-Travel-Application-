@@ -218,10 +218,12 @@ npm test
 
 | Name | Student ID | Role |
 |---|---|---|
-| _Your name_ | _ID_ | _e.g. Full-stack developer_ |
-| _Member 2_ | _ID_ | _..._ |
+|SYED MUHAMMAD UMAR |bb-29160 | Full-stack developer |
+| SYED TAHA WASTI | _ID_ | QA |
+|SYEDA RAMESHA | _ID_ | Full-stack developer |
+|MUHAMAMD TALHA | _ID_ | Full-stack developer |
 
-**Supervisor:** _Name, Designation_
+**Supervisor:** SIR AMJAD JUMANI 
 
 ## Acknowledgements
 
