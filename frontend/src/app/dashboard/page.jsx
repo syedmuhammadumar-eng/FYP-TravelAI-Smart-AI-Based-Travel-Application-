@@ -1,0 +1,2529 @@
+"use client";
+
+import { useEffect, useState, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { useAuthStore } from "@/store/authStore";
+import {
+  MapPin,
+  Calendar,
+  TrendingUp,
+  MessageSquare,
+  Settings,
+  Plus,
+  Globe,
+} from "lucide-react";
+import LoginModal from "@/components/auth/LoginModal";
+import RegisterModal from "@/components/auth/RegisterModal";
+import { tripsAPI, externalAPI } from "@/lib/api";
+import { useLocation, getCurrencySymbol } from "@/hooks/useLocation";
+import { useWeather } from "@/hooks/useWeather";
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+
+// Weather icon mapping (from useWeather.js)
+const FORECAST_ICON_MAP = {
+  "01d": "☀️",
+  "01n": "🌙",
+  "02d": "⛅",
+  "02n": "☁️",
+  "03d": "☁️",
+  "03n": "☁️",
+  "04d": "☁️",
+  "04n": "☁️",
+  "09d": "🌧️",
+  "09n": "🌧️",
+  "10d": "🌦️",
+  "10n": "🌧️",
+  "11d": "⛈️",
+  "11n": "⛈️",
+  "13d": "❄️",
+  "13n": "❄️",
+  "50d": "🌫️",
+  "50n": "🌫️",
+  // wttr.in codes
+  113: "☀️",
+  116: "⛅",
+  119: "☁️",
+  122: "☁️",
+  143: "🌫️",
+  176: "🌦️",
+  179: "🌨️",
+  182: "🌨️",
+  200: "⛈️",
+  227: "❄️",
+  230: "❄️",
+  248: "🌫️",
+  260: "🌫️",
+  263: "🌦️",
+  266: "🌦️",
+  293: "🌦️",
+  296: "🌧️",
+  299: "🌧️",
+  302: "🌧️",
+  305: "🌧️",
+  308: "🌧️",
+  311: "🌧️",
+  314: "🌧️",
+  353: "🌦️",
+  356: "🌧️",
+  359: "🌧️",
+  386: "⛈️",
+  389: "⛈️",
+  392: "⛈️",
+  395: "❄️",
+};
+
+async function fetchAllNearbyFromBackend(lat, lng, countryCode, radius = 5000) {
+  try {
+    const res = await fetch(
+      `${API_URL}/api/external/nearby-all?lat=${lat}&lng=${lng}&radius=${radius}&countryCode=${countryCode || ""}`,
+      { signal: AbortSignal.timeout(30000) },
+    );
+    const json = await res.json();
+    if (json.success && json.data) {
+      return {
+        categories: json.data,
+        isMuslimCountry: json.isMuslimCountry || false,
+      };
+    }
+  } catch {}
+  return null;
+}
+
+const NEARBY_CACHE_TTL = 15 * 60 * 1000;
+
+function getNearbyCache(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const { data, ts } = JSON.parse(raw);
+    return Date.now() - ts < NEARBY_CACHE_TTL ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function setNearbyCache(key, data) {
+  try {
+    localStorage.setItem(key, JSON.stringify({ data, ts: Date.now() }));
+  } catch {}
+}
+
+// ── Nearby categories ────────────────────────────────────────────────────────
+
+const NEARBY_CATEGORIES = [
+  { key: "mosques", emoji: "🕌", title: "Nearby Mosques" },
+  { key: "hospitals", emoji: "🏥", title: "Hospitals & Clinics" },
+  { key: "pharmacy", emoji: "💊", title: "Pharmacies" },
+  { key: "police", emoji: "👮", title: "Police Stations" },
+  { key: "halal", emoji: "🍽️", title: "Halal Restaurants" },
+  { key: "atms", emoji: "🏧", title: "ATMs & Banks" },
+  { key: "fuel", emoji: "⛽", title: "Petrol Stations" },
+  { key: "ngos", emoji: "🤝", title: "NGOs & Charities" },
+  { key: "parking", emoji: "🅿️", title: "Parking" },
+];
+
+// ── Emergency contacts by country code ────────────────────────────────────
+
+const EMERGENCY_CONTACTS = {
+  PK: {
+    police: "15",
+    ambulance: "1122",
+    fire: "16",
+    tourist: "1422",
+    name: "Pakistan",
+  },
+  US: {
+    police: "911",
+    ambulance: "911",
+    fire: "911",
+    tourist: "1-800-877-8339",
+    name: "United States",
+  },
+  GB: {
+    police: "999",
+    ambulance: "999",
+    fire: "999",
+    tourist: "0800-111-6000",
+    name: "United Kingdom",
+  },
+  AE: {
+    police: "999",
+    ambulance: "998",
+    fire: "997",
+    tourist: "800-2255",
+    name: "UAE",
+  },
+  TR: {
+    police: "155",
+    ambulance: "112",
+    fire: "110",
+    tourist: "170",
+    name: "Turkey",
+  },
+  IN: {
+    police: "100",
+    ambulance: "102",
+    fire: "101",
+    tourist: "1363",
+    name: "India",
+  },
+  SA: {
+    police: "999",
+    ambulance: "997",
+    fire: "998",
+    tourist: "930",
+    name: "Saudi Arabia",
+  },
+  MY: {
+    police: "999",
+    ambulance: "999",
+    fire: "994",
+    tourist: "03-8891-8000",
+    name: "Malaysia",
+  },
+  TH: {
+    police: "191",
+    ambulance: "1669",
+    fire: "199",
+    tourist: "1155",
+    name: "Thailand",
+  },
+  JP: {
+    police: "110",
+    ambulance: "119",
+    fire: "119",
+    tourist: "03-3501-3224",
+    name: "Japan",
+  },
+  FR: {
+    police: "17",
+    ambulance: "15",
+    fire: "18",
+    tourist: "3237",
+    name: "France",
+  },
+  DE: {
+    police: "110",
+    ambulance: "112",
+    fire: "112",
+    tourist: "030-250025",
+    name: "Germany",
+  },
+  IT: {
+    police: "113",
+    ambulance: "118",
+    fire: "115",
+    tourist: "06-4686",
+    name: "Italy",
+  },
+  ES: {
+    police: "091",
+    ambulance: "061",
+    fire: "080",
+    tourist: "902-102-112",
+    name: "Spain",
+  },
+  EG: {
+    police: "122",
+    ambulance: "123",
+    fire: "180",
+    tourist: "126",
+    name: "Egypt",
+  },
+  ID: {
+    police: "110",
+    ambulance: "118",
+    fire: "113",
+    tourist: "021-526-0196",
+    name: "Indonesia",
+  },
+  DEFAULT: {
+    police: "112",
+    ambulance: "112",
+    fire: "112",
+    tourist: "—",
+    name: "International",
+  },
+  // More countries
+  QA: {
+    police: "999",
+    ambulance: "999",
+    fire: "999",
+    tourist: "—",
+    name: "Qatar",
+  },
+  BD: {
+    police: "999",
+    ambulance: "199",
+    fire: "199",
+    tourist: "—",
+    name: "Bangladesh",
+  },
+  LK: {
+    police: "119",
+    ambulance: "110",
+    fire: "110",
+    tourist: "1912",
+    name: "Sri Lanka",
+  },
+  NP: {
+    police: "100",
+    ambulance: "102",
+    fire: "101",
+    tourist: "1144",
+    name: "Nepal",
+  },
+  CN: {
+    police: "110",
+    ambulance: "120",
+    fire: "119",
+    tourist: "12301",
+    name: "China",
+  },
+  KR: {
+    police: "112",
+    ambulance: "119",
+    fire: "119",
+    tourist: "1330",
+    name: "South Korea",
+  },
+  AU: {
+    police: "000",
+    ambulance: "000",
+    fire: "000",
+    tourist: "1300-555-135",
+    name: "Australia",
+  },
+  CA: {
+    police: "911",
+    ambulance: "911",
+    fire: "911",
+    tourist: "—",
+    name: "Canada",
+  },
+  SG: {
+    police: "999",
+    ambulance: "995",
+    fire: "995",
+    tourist: "1800-736-2000",
+    name: "Singapore",
+  },
+  GR: {
+    police: "100",
+    ambulance: "166",
+    fire: "199",
+    tourist: "171",
+    name: "Greece",
+  },
+  PT: {
+    police: "112",
+    ambulance: "112",
+    fire: "112",
+    tourist: "808-781-212",
+    name: "Portugal",
+  },
+  NL: {
+    police: "112",
+    ambulance: "112",
+    fire: "112",
+    tourist: "0900-400-4040",
+    name: "Netherlands",
+  },
+  MA: {
+    police: "19",
+    ambulance: "15",
+    fire: "15",
+    tourist: "—",
+    name: "Morocco",
+  },
+  JO: {
+    police: "911",
+    ambulance: "911",
+    fire: "911",
+    tourist: "—",
+    name: "Jordan",
+  },
+  OM: {
+    police: "9999",
+    ambulance: "9999",
+    fire: "9999",
+    tourist: "—",
+    name: "Oman",
+  },
+  KW: {
+    police: "112",
+    ambulance: "112",
+    fire: "112",
+    tourist: "—",
+    name: "Kuwait",
+  },
+  BH: {
+    police: "999",
+    ambulance: "999",
+    fire: "999",
+    tourist: "—",
+    name: "Bahrain",
+  },
+  MV: {
+    police: "119",
+    ambulance: "102",
+    fire: "118",
+    tourist: "—",
+    name: "Maldives",
+  },
+  KE: {
+    police: "999",
+    ambulance: "999",
+    fire: "999",
+    tourist: "—",
+    name: "Kenya",
+  },
+  ZA: {
+    police: "10111",
+    ambulance: "10177",
+    fire: "10177",
+    tourist: "083-123-6789",
+    name: "South Africa",
+  },
+  BR: {
+    police: "190",
+    ambulance: "192",
+    fire: "193",
+    tourist: "—",
+    name: "Brazil",
+  },
+  MX: {
+    police: "911",
+    ambulance: "911",
+    fire: "911",
+    tourist: "078",
+    name: "Mexico",
+  },
+};
+
+// ── Styles ───────────────────────────────────────────────────────────────────
+
+const cardShadow = "0 2px 12px rgba(0,0,0,0.06)";
+
+const styles = {
+  container: {
+    width: "100%",
+    maxWidth: 1280,
+    margin: "0 auto",
+    padding: "32px 16px",
+  },
+  headerRow: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 32,
+    gap: 16,
+  },
+  h1: { fontSize: 28, fontWeight: 700, color: "#0A0A0A", margin: 0 },
+  subtitle: { color: "#6B7280", margin: "4px 0 0" },
+  btnGroup: { display: "flex", gap: 10 },
+  btnOutline: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "8px 16px",
+    border: "1px solid #E5E7EB",
+    borderRadius: 8,
+    background: "#fff",
+    cursor: "pointer",
+    fontSize: 14,
+    fontWeight: 500,
+    color: "#374151",
+  },
+  btnPrimary: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "8px 16px",
+    border: "none",
+    borderRadius: 8,
+    background: "#FF4500",
+    color: "#fff",
+    cursor: "pointer",
+    fontSize: 14,
+    fontWeight: 500,
+  },
+  statsGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: 20,
+    marginBottom: 32,
+  },
+  statCard: {
+    background: "#fff",
+    borderRadius: 16,
+    padding: 20,
+    boxShadow: cardShadow,
+  },
+  statEmoji: { fontSize: 28, marginBottom: 8 },
+  statValue: { fontSize: 22, fontWeight: 700, color: "#0A0A0A", margin: 0 },
+  statSub: { fontSize: 13, color: "#6B7280", margin: "4px 0 0" },
+  sectionTitle: {
+    fontSize: 22,
+    fontWeight: 700,
+    color: "#0A0A0A",
+    margin: "0 0 20px",
+  },
+  nearbyGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+    gap: 20,
+    marginBottom: 40,
+  },
+  nearbyCard: {
+    background: "#fff",
+    borderRadius: 16,
+    padding: 20,
+    boxShadow: cardShadow,
+  },
+  nearbyHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 14,
+  },
+  nearbyEmoji: { fontSize: 24 },
+  nearbyTitle: { fontSize: 16, fontWeight: 600, color: "#0A0A0A", margin: 0 },
+  nearbyItem: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: "8px 0",
+    borderBottom: "1px solid #F3F4F6",
+  },
+  nearbyName: { fontSize: 14, color: "#374151", fontWeight: 500 },
+  nearbyDist: { fontSize: 12, color: "#9CA3AF" },
+  mapLink: {
+    fontSize: 12,
+    color: "#FF4500",
+    textDecoration: "none",
+    marginLeft: 8,
+    whiteSpace: "nowrap",
+  },
+  skeleton: {
+    height: 14,
+    borderRadius: 6,
+    background: "linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)",
+    backgroundSize: "200% 100%",
+    animation: "shimmer 1.5s infinite",
+    marginBottom: 10,
+  },
+  mainGrid: {
+    display: "grid",
+    gridTemplateColumns: "2fr 1fr",
+    gap: 32,
+  },
+  tripCard: {
+    background: "#fff",
+    borderRadius: 12,
+    padding: 20,
+    boxShadow: cardShadow,
+    marginBottom: 12,
+  },
+  tripTitle: {
+    fontSize: 18,
+    fontWeight: 600,
+    color: "#0A0A0A",
+    margin: "0 0 4px",
+  },
+  tripDest: {
+    fontSize: 14,
+    color: "#6B7280",
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    marginBottom: 8,
+  },
+  badge: (bg, color) => ({
+    display: "inline-block",
+    padding: "2px 10px",
+    fontSize: 12,
+    fontWeight: 500,
+    borderRadius: 999,
+    background: bg,
+    color,
+    marginRight: 6,
+  }),
+  quickAction: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    width: "100%",
+    padding: 14,
+    background: "#fff",
+    border: "1px solid #E5E7EB",
+    borderRadius: 12,
+    cursor: "pointer",
+    marginBottom: 10,
+    textAlign: "left",
+    transition: "border-color 0.15s",
+  },
+  qaIcon: (bg) => ({
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: bg,
+    flexShrink: 0,
+  }),
+  qaTitle: { fontSize: 14, fontWeight: 600, color: "#0A0A0A", margin: 0 },
+  qaSub: { fontSize: 13, color: "#6B7280", margin: 0 },
+  emptyTrips: {
+    textAlign: "center",
+    padding: "40px 20px",
+    background: "#fff",
+    borderRadius: 12,
+    boxShadow: cardShadow,
+  },
+};
+
+// ── Component ────────────────────────────────────────────────────────────────
+
+export default function DashboardPage() {
+  const router = useRouter();
+  const { user, isAuthenticated } = useAuthStore();
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
+  const [trips, setTrips] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Live data hooks
+  const loc = useLocation();
+  const weather = useWeather({ lat: loc.lat, lng: loc.lng, city: loc.city });
+
+  // Live clock — aligned with IP-detected timezone
+  const [currentTime, setCurrentTime] = useState("");
+  const [timeZone, setTimeZone] = useState("");
+
+  useEffect(() => {
+    // Use IP-detected timezone, fallback to browser timezone
+    const tz =
+      loc.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    setTimeZone(tz);
+    const tick = () => {
+      const now = new Date();
+      setCurrentTime(
+        now.toLocaleTimeString("en-GB", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          timeZone: tz,
+        }),
+      );
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [loc.timezone]);
+
+  // Nearby places
+  const [nearby, setNearby] = useState({});
+  const [nearbyLoading, setNearbyLoading] = useState(true);
+  const [isMuslimCountry, setIsMuslimCountry] = useState(false);
+  const fetchedRef = useRef(false);
+
+  // UNESCO World Heritage Sites
+  const [unescoSites, setUnescoSites] = useState([]);
+  const [unescoLoading, setUnescoLoading] = useState(true);
+  const unescoFetchedRef = useRef(false);
+
+  // Food Search
+  const [foodQuery, setFoodQuery] = useState("");
+  const [foodDietary, setFoodDietary] = useState("halal");
+  const [foodRadius, setFoodRadius] = useState("2000");
+  const [foodResults, setFoodResults] = useState([]);
+  const [foodLoading, setFoodLoading] = useState(false);
+  const [foodSearched, setFoodSearched] = useState(false);
+
+  // Attractions Near You
+  const [attractions, setAttractions] = useState([]);
+  const [attractionsLoading, setAttractionsLoading] = useState(true);
+
+  // 7-Day Forecast + Weather Alerts
+  const [forecast, setForecast] = useState([]);
+  const [forecastLoading, setForecastLoading] = useState(true);
+  const [weatherAlert, setWeatherAlert] = useState(null);
+  const [alertDismissed, setAlertDismissed] = useState(false);
+
+  // Currency Exchange Rates
+  const [rates, setRates] = useState(null);
+  const [ratesLoading, setRatesLoading] = useState(true);
+  const [convertFrom, setConvertFrom] = useState("PKR");
+  const [convertTo, setConvertTo] = useState("USD");
+  const [convertAmount, setConvertAmount] = useState(10000);
+
+  useEffect(() => {
+    if (!loc.lat || !loc.lng || fetchedRef.current) return;
+    fetchedRef.current = true;
+
+    const cacheKey = `nearby_${loc.lat.toFixed(2)}_${loc.lng.toFixed(2)}`;
+    const cached = getNearbyCache(cacheKey);
+    // Only use cache if at least 3 categories have data (not a partial/failed result)
+    if (cached) {
+      const filledCount = Object.values(cached).filter(
+        (arr) => Array.isArray(arr) && arr.length > 0,
+      ).length;
+      if (filledCount >= 3) {
+        setNearby(cached);
+        setNearbyLoading(false);
+        return;
+      }
+      // Partial cache — clear it and refetch
+      try {
+        localStorage.removeItem(cacheKey);
+      } catch {}
+    }
+
+    setNearbyLoading(true);
+
+    const fetchAll = async () => {
+      const result = await fetchAllNearbyFromBackend(
+        loc.lat,
+        loc.lng,
+        loc.countryCode,
+      );
+      if (result) {
+        const data = result.categories;
+        // Only cache if at least 3 categories have results
+        const filledCount = Object.values(data).filter(
+          (arr) => Array.isArray(arr) && arr.length > 0,
+        ).length;
+        setNearby(data);
+        setIsMuslimCountry(result.isMuslimCountry);
+        if (filledCount >= 3) setNearbyCache(cacheKey, data);
+      } else {
+        const empty = {};
+        NEARBY_CATEGORIES.forEach((cat) => {
+          empty[cat.key] = [];
+        });
+        setNearby(empty);
+      }
+      setNearbyLoading(false);
+    };
+
+    fetchAll();
+  }, [loc.lat, loc.lng]);
+
+  // UNESCO World Heritage Sites fetch
+  useEffect(() => {
+    if (!loc.lat || !loc.lng || unescoFetchedRef.current) return;
+    unescoFetchedRef.current = true;
+
+    const cacheKey = `unesco_${loc.lat.toFixed(2)}_${loc.lng.toFixed(2)}`;
+    const cached = getNearbyCache(cacheKey);
+    if (cached && Array.isArray(cached) && cached.length > 0) {
+      setUnescoSites(cached);
+      setUnescoLoading(false);
+      return;
+    }
+
+    setUnescoLoading(true);
+    const fetchUnesco = async () => {
+      try {
+        const res = await fetch(
+          `${API_URL}/api/external/unesco?lat=${loc.lat}&lng=${loc.lng}&radius=200&countryCode=${loc.countryCode || ""}`,
+          { signal: AbortSignal.timeout(25000) },
+        );
+        const json = await res.json();
+        if (json.success && json.data?.length > 0) {
+          setUnescoSites(json.data);
+          setNearbyCache(cacheKey, json.data);
+        }
+      } catch {}
+      setUnescoLoading(false);
+    };
+    fetchUnesco();
+  }, [loc.lat, loc.lng]);
+
+  // Attractions Near You fetch
+  const attractionsFetchedRef = useRef(false);
+  useEffect(() => {
+    if (!loc.lat || !loc.lng || attractionsFetchedRef.current) return;
+    attractionsFetchedRef.current = true;
+
+    const cacheKey = `attractions_${loc.lat.toFixed(2)}_${loc.lng.toFixed(2)}`;
+    const cached = getNearbyCache(cacheKey);
+    if (cached && Array.isArray(cached) && cached.length > 0) {
+      setAttractions(cached);
+      setAttractionsLoading(false);
+      return;
+    }
+
+    setAttractionsLoading(true);
+    const fetchAttractions = async () => {
+      try {
+        const res = await externalAPI.attractions(loc.lat, loc.lng);
+        const data = res.data?.data || [];
+        if (data.length > 0) {
+          setAttractions(data);
+          setNearbyCache(cacheKey, data);
+        }
+      } catch {}
+      setAttractionsLoading(false);
+    };
+    fetchAttractions();
+  }, [loc.lat, loc.lng]);
+
+  // 7-Day Forecast fetch
+  const forecastFetchedRef = useRef(false);
+  useEffect(() => {
+    if (!loc.lat || !loc.lng || forecastFetchedRef.current) return;
+    forecastFetchedRef.current = true;
+
+    const cacheKey = `forecast_${loc.lat.toFixed(2)}_${loc.lng.toFixed(2)}`;
+    const cached = getNearbyCache(cacheKey);
+    if (cached && Array.isArray(cached) && cached.length > 0) {
+      setForecast(cached);
+      setForecastLoading(false);
+      return;
+    }
+
+    setForecastLoading(true);
+    const fetchForecast = async () => {
+      try {
+        const res = await externalAPI.forecast(loc.lat, loc.lng, 7);
+        const data = res.data?.data || [];
+        if (data.length > 0) {
+          setForecast(data);
+          setNearbyCache(cacheKey, data);
+        }
+      } catch {}
+      setForecastLoading(false);
+    };
+    fetchForecast();
+  }, [loc.lat, loc.lng]);
+
+  // Weather alert detection
+  useEffect(() => {
+    if (!weather.condition) return;
+    const condition = weather.condition.toLowerCase();
+    const severeWords = ["rain", "storm", "thunder", "snow", "extreme"];
+    const match = severeWords.find((w) => condition.includes(w));
+    if (match) {
+      const severity = ["storm", "thunder", "extreme"].some((w) =>
+        condition.includes(w),
+      )
+        ? "severe"
+        : "warning";
+      setWeatherAlert({
+        condition: weather.condition,
+        city: weather.city || loc.city,
+        severity,
+      });
+    }
+  }, [weather.condition, weather.city, loc.city]);
+
+  // Currency Exchange Rates fetch
+  useEffect(() => {
+    const CURRENCY_CACHE_KEY = "currency_rates_pkr";
+    const CURRENCY_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+    const fetchRates = async () => {
+      // Check localStorage cache first
+      try {
+        const raw = localStorage.getItem(CURRENCY_CACHE_KEY);
+        if (raw) {
+          const cached = JSON.parse(raw);
+          if (Date.now() - cached.ts < CURRENCY_CACHE_TTL && cached.data) {
+            setRates(cached.data);
+            setRatesLoading(false);
+            return;
+          }
+        }
+      } catch {}
+
+      // Fetch fresh rates
+      try {
+        const res = await fetch("https://open.er-api.com/v6/latest/PKR", {
+          signal: AbortSignal.timeout(10000),
+        });
+        const json = await res.json();
+        if (json.result === "success" && json.rates) {
+          const rateData = {
+            rates: json.rates,
+            time_last_update_unix: json.time_last_update_unix,
+          };
+          setRates(rateData);
+          try {
+            localStorage.setItem(
+              CURRENCY_CACHE_KEY,
+              JSON.stringify({ data: rateData, ts: Date.now() }),
+            );
+          } catch {}
+        }
+      } catch (e) {
+        console.log("[Dashboard] Currency rates fetch failed:", e.message);
+      }
+      setRatesLoading(false);
+    };
+
+    fetchRates();
+  }, []);
+
+  // Auto-detect user's home currency for converter
+  useEffect(() => {
+    if (loc.currency && loc.currency !== "PKR") {
+      setConvertTo(loc.currency);
+    }
+  }, [loc.currency]);
+
+  // Auth check + trips fetch
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setIsLoginModalOpen(true);
+      return;
+    }
+    tripsAPI
+      .getAll()
+      .then(({ data }) => setTrips(data.data || []))
+      .catch(() => setTrips([]))
+      .finally(() => setLoading(false));
+  }, [isAuthenticated]);
+
+  // Food search handler
+  const searchFood = async () => {
+    if (!loc.lat || !loc.lng) return;
+    setFoodLoading(true);
+    setFoodSearched(true);
+    try {
+      const query = foodQuery.trim() || "restaurant";
+      const res = await externalAPI.places(
+        query,
+        loc.lat,
+        loc.lng,
+        "restaurant",
+      );
+      const results = res.data?.data || [];
+      // Filter by dietary preference
+      let filtered = results;
+      if (foodDietary === "halal") {
+        filtered = results.filter((r) => r.dietary?.halal || r.halalStatus);
+        if (filtered.length === 0) filtered = results; // fallback to all if no halal tagged
+      }
+      setFoodResults(filtered.slice(0, 8));
+    } catch {
+      setFoodResults([]);
+    }
+    setFoodLoading(false);
+  };
+
+  // ── Auth wall ──────────────────────────────────────────────────────────────
+
+  if (!isAuthenticated) {
+    return (
+      <>
+        <LoginModal
+          isOpen={isLoginModalOpen}
+          onClose={() => router.push("/")}
+          onSwitchToRegister={() => {
+            setIsLoginModalOpen(false);
+            setIsRegisterModalOpen(true);
+          }}
+        />
+        <RegisterModal
+          isOpen={isRegisterModalOpen}
+          onClose={() => router.push("/")}
+          onSwitchToLogin={() => {
+            setIsRegisterModalOpen(false);
+            setIsLoginModalOpen(true);
+          }}
+        />
+      </>
+    );
+  }
+
+  const recentTrips = trips.slice(0, 3);
+  const currSymbol = getCurrencySymbol(loc.currency);
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  return (
+    <div style={styles.container}>
+      {/* Shimmer keyframes */}
+      <style>{`@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}`}</style>
+
+      {/* ── Header ──────────────────────────────────────────────────────── */}
+      <div style={styles.headerRow}>
+        <div>
+          <h1 style={styles.h1}>Welcome back, {user?.name}! 👋</h1>
+          <p style={styles.subtitle}>
+            Here&apos;s what&apos;s happening with your travels
+          </p>
+        </div>
+        <div style={styles.btnGroup}>
+          <button
+            style={styles.btnOutline}
+            onClick={() => router.push("/settings")}
+          >
+            <Settings size={16} /> Settings
+          </button>
+          <button
+            style={styles.btnPrimary}
+            onClick={() => router.push("/chat")}
+          >
+            <Plus size={16} /> Plan New Trip
+          </button>
+        </div>
+      </div>
+
+      {/* ── Live Stats ──────────────────────────────────────────────────── */}
+      <div style={styles.statsGrid}>
+        {/* Location */}
+        <div style={styles.statCard}>
+          <div style={styles.statEmoji}>📍</div>
+          <p style={styles.statValue}>
+            {loc.loading ? "Detecting…" : `${loc.city}, ${loc.country}`}
+          </p>
+          <p style={styles.statSub}>
+            {loc.lat && loc.lng
+              ? `${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`
+              : "Locating…"}
+          </p>
+        </div>
+
+        {/* Time */}
+        <div style={styles.statCard}>
+          <div style={styles.statEmoji}>🕐</div>
+          <p style={styles.statValue}>{currentTime || "--:--:--"}</p>
+          <p style={styles.statSub}>{timeZone}</p>
+        </div>
+
+        {/* Weather */}
+        <div style={styles.statCard}>
+          <div style={styles.statEmoji}>{weather.icon || "🌡️"}</div>
+          <p style={styles.statValue}>
+            {weather.loading
+              ? "Loading…"
+              : weather.temp !== null
+                ? `${weather.temp}°C — ${weather.condition}`
+                : "Unavailable"}
+          </p>
+          <p style={styles.statSub}>
+            {weather.feelsLike !== null
+              ? `Feels like ${weather.feelsLike}°C`
+              : ""}
+          </p>
+        </div>
+
+        {/* Currency */}
+        <div style={styles.statCard}>
+          <div style={styles.statEmoji}>💱</div>
+          <p style={styles.statValue}>
+            {loc.loading ? "Detecting…" : `${currSymbol} ${loc.currency}`}
+          </p>
+          <p style={styles.statSub}>Auto-detected from IP</p>
+        </div>
+      </div>
+
+      {/* ── Weather Alert Banner (conditional) ───────────────────────── */}
+      {weatherAlert && !alertDismissed && (
+        <div
+          style={{
+            marginBottom: 24,
+            padding: "16px 20px",
+            borderRadius: 12,
+            background:
+              weatherAlert.severity === "severe"
+                ? "linear-gradient(135deg, #FEE2E2, #FECACA)"
+                : "linear-gradient(135deg, #FEF3C7, #FDE68A)",
+            border:
+              weatherAlert.severity === "severe"
+                ? "1px solid #FECACA"
+                : "1px solid #FDE68A",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <p
+            style={{
+              fontSize: 15,
+              fontWeight: 600,
+              color: weatherAlert.severity === "severe" ? "#991B1B" : "#92400E",
+              margin: 0,
+              flex: 1,
+            }}
+          >
+            ⚠️ Weather Alert — {weatherAlert.city}: {weatherAlert.condition}.
+            Take precautions.
+          </p>
+          <button
+            onClick={() => setAlertDismissed(true)}
+            style={{
+              background: "none",
+              border: "none",
+              fontSize: 20,
+              cursor: "pointer",
+              color: weatherAlert.severity === "severe" ? "#991B1B" : "#92400E",
+              padding: "4px 8px",
+              lineHeight: 1,
+              flexShrink: 0,
+            }}
+            aria-label="Dismiss weather alert"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* ── 7-Day Forecast ──────────────────────────────────────────────── */}
+      <div style={{ marginBottom: 32 }}>
+        <h2 style={styles.sectionTitle}>🌤️ 7-Day Forecast</h2>
+        {forecastLoading ? (
+          <div
+            style={{
+              display: "flex",
+              gap: 16,
+              overflowX: "auto",
+              paddingBottom: 8,
+            }}
+          >
+            {[1, 2, 3, 4, 5, 6, 7].map((i) => (
+              <div
+                key={i}
+                style={{
+                  minWidth: 120,
+                  background: "#fff",
+                  borderRadius: 16,
+                  padding: 16,
+                  boxShadow: cardShadow,
+                  textAlign: "center",
+                  flexShrink: 0,
+                }}
+              >
+                <div
+                  style={{
+                    ...styles.skeleton,
+                    width: "60%",
+                    margin: "0 auto 8px",
+                  }}
+                />
+                <div
+                  style={{
+                    ...styles.skeleton,
+                    width: "40%",
+                    height: 28,
+                    margin: "0 auto 8px",
+                  }}
+                />
+                <div
+                  style={{ ...styles.skeleton, width: "80%", margin: "0 auto" }}
+                />
+              </div>
+            ))}
+          </div>
+        ) : forecast.length === 0 ? (
+          <div
+            style={{ ...styles.nearbyCard, textAlign: "center", padding: 32 }}
+          >
+            <p style={{ fontSize: 14, color: "#9CA3AF", margin: 0 }}>
+              Forecast data unavailable
+            </p>
+          </div>
+        ) : (
+          <div
+            style={{
+              display: "flex",
+              gap: 16,
+              overflowX: "auto",
+              paddingBottom: 8,
+            }}
+          >
+            {forecast.map((day, i) => {
+              const dayName = new Date(day.date).toLocaleDateString("en-US", {
+                weekday: "short",
+              });
+              const iconEmoji = FORECAST_ICON_MAP[day.icon] || "🌡️";
+              return (
+                <div
+                  key={i}
+                  style={{
+                    minWidth: 120,
+                    background: "#fff",
+                    borderRadius: 16,
+                    padding: 16,
+                    boxShadow: cardShadow,
+                    textAlign: "center",
+                    flexShrink: 0,
+                  }}
+                >
+                  <p
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: "#6B7280",
+                      margin: "0 0 6px",
+                    }}
+                  >
+                    {dayName}
+                  </p>
+                  <div style={{ fontSize: 32, marginBottom: 6 }}>
+                    {iconEmoji}
+                  </div>
+                  <p
+                    style={{
+                      fontSize: 15,
+                      fontWeight: 700,
+                      color: "#0A0A0A",
+                      margin: "0 0 2px",
+                    }}
+                  >
+                    {day.temp !== undefined ? `${day.temp}°C` : "—"}
+                  </p>
+                  <p style={{ fontSize: 11, color: "#9CA3AF", margin: 0 }}>
+                    {day.description || ""}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ── Near You Right Now ──────────────────────────────────────────── */}
+      <h2 style={styles.sectionTitle}>📍 Near You Right Now</h2>
+      <div style={styles.nearbyGrid}>
+        {NEARBY_CATEGORIES.map((cat) => {
+          const items = nearby[cat.key];
+          const isLoading = nearbyLoading || !items;
+
+          return (
+            <div key={cat.key} style={styles.nearbyCard}>
+              <div style={styles.nearbyHeader}>
+                <span style={styles.nearbyEmoji}>{cat.emoji}</span>
+                <h3 style={styles.nearbyTitle}>{cat.title}</h3>
+              </div>
+
+              {isLoading ? (
+                <>
+                  <div style={{ ...styles.skeleton, width: "80%" }} />
+                  <div style={{ ...styles.skeleton, width: "60%" }} />
+                  <div style={{ ...styles.skeleton, width: "70%" }} />
+                </>
+              ) : items.length === 0 ? (
+                <p style={{ fontSize: 14, color: "#9CA3AF", margin: 0 }}>
+                  None found nearby
+                </p>
+              ) : (
+                <>
+                  {cat.key === "halal" &&
+                    items.length > 0 &&
+                    isMuslimCountry && (
+                      <p
+                        style={{
+                          fontSize: 11,
+                          color: "#10B981",
+                          margin: "0 0 8px",
+                          fontWeight: 500,
+                        }}
+                      >
+                        ✅ All restaurants in this region are halal by default.
+                      </p>
+                    )}
+                  {cat.key === "halal" &&
+                    items.length > 0 &&
+                    !isMuslimCountry &&
+                    !items.some(
+                      (p) =>
+                        p.cuisine &&
+                        /halal|pakistani|arabic|turkish|indian|muslim/i.test(
+                          p.cuisine,
+                        ),
+                    ) && (
+                      <p
+                        style={{
+                          fontSize: 11,
+                          color: "#F59E0B",
+                          margin: "0 0 8px",
+                          fontWeight: 500,
+                        }}
+                      >
+                        ⚠️ No verified halal restaurants found — showing nearby
+                        restaurants. Verify halal status locally.
+                      </p>
+                    )}
+                  {items.map((place, i) => (
+                    <div key={i} style={styles.nearbyItem}>
+                      <div>
+                        <span style={styles.nearbyName}>{place.name}</span>
+                        <span style={styles.nearbyDist}>
+                          {" · "}
+                          {place.distanceText || ""}
+                        </span>
+                      </div>
+                      <a
+                        href={`https://www.google.com/maps/search/${encodeURIComponent(place.name)}+${place.lat},${place.lng}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={styles.mapLink}
+                      >
+                        View on Map ↗
+                      </a>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── Food Search Widget ──────────────────────────────────────────── */}
+      <div style={{ marginBottom: 40 }}>
+        <h2 style={styles.sectionTitle}>🍽️ Find Halal Food Near You</h2>
+        <div
+          style={{
+            background: "#fff",
+            borderRadius: 16,
+            padding: 24,
+            boxShadow: cardShadow,
+          }}
+        >
+          {/* Search Input */}
+          <div style={{ marginBottom: 16 }}>
+            <input
+              type="text"
+              placeholder="Search: biryani, shawarma, pizza..."
+              value={foodQuery}
+              onChange={(e) => setFoodQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && searchFood()}
+              style={{
+                width: "100%",
+                padding: "12px 16px",
+                border: "1px solid #E5E7EB",
+                borderRadius: 10,
+                fontSize: 15,
+                color: "#0A0A0A",
+                outline: "none",
+                fontFamily: "inherit",
+                boxSizing: "border-box",
+              }}
+            />
+          </div>
+
+          {/* Dietary Filter Chips */}
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              marginBottom: 12,
+            }}
+          >
+            {[
+              { key: "halal", label: "Halal ✓" },
+              { key: "vegan", label: "Vegan" },
+              { key: "vegetarian", label: "Vegetarian" },
+            ].map((d) => (
+              <button
+                key={d.key}
+                onClick={() => setFoodDietary(d.key)}
+                style={{
+                  padding: "6px 16px",
+                  borderRadius: 99,
+                  border:
+                    foodDietary === d.key
+                      ? "2px solid #FF4500"
+                      : "1px solid #E5E7EB",
+                  background: foodDietary === d.key ? "#FFF5F0" : "#fff",
+                  color: foodDietary === d.key ? "#FF4500" : "#374151",
+                  fontWeight: foodDietary === d.key ? 700 : 500,
+                  fontSize: 13,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Radius Chips */}
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              marginBottom: 16,
+            }}
+          >
+            {[
+              { key: "500", label: "500m" },
+              { key: "1000", label: "1km" },
+              { key: "2000", label: "2km" },
+              { key: "5000", label: "5km" },
+            ].map((r) => (
+              <button
+                key={r.key}
+                onClick={() => setFoodRadius(r.key)}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 99,
+                  border:
+                    foodRadius === r.key
+                      ? "2px solid #FF4500"
+                      : "1px solid #E5E7EB",
+                  background: foodRadius === r.key ? "#FFF5F0" : "#fff",
+                  color: foodRadius === r.key ? "#FF4500" : "#374151",
+                  fontWeight: foodRadius === r.key ? 700 : 500,
+                  fontSize: 13,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Search Button */}
+          <button
+            onClick={searchFood}
+            disabled={foodLoading || !loc.lat || !loc.lng}
+            style={{
+              padding: "10px 28px",
+              border: "none",
+              borderRadius: 10,
+              background: "linear-gradient(135deg, #FF4500, #FF6B35)",
+              color: "#fff",
+              fontSize: 15,
+              fontWeight: 700,
+              cursor: foodLoading ? "wait" : "pointer",
+              fontFamily: "inherit",
+              opacity: foodLoading ? 0.7 : 1,
+            }}
+          >
+            {foodLoading ? "Searching…" : "Search Food"}
+          </button>
+
+          {/* Results */}
+          {foodSearched && !foodLoading && (
+            <div style={{ marginTop: 20 }}>
+              {foodResults.length === 0 ? (
+                <p style={{ fontSize: 14, color: "#9CA3AF", margin: 0 }}>
+                  No results found. Try a different search or expand the radius.
+                </p>
+              ) : (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns:
+                      "repeat(auto-fill, minmax(280px, 1fr))",
+                    gap: 16,
+                  }}
+                >
+                  {foodResults.map((place, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        background: "#F9FAFB",
+                        borderRadius: 12,
+                        padding: 16,
+                        border: "1px solid #F3F4F6",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "flex-start",
+                          marginBottom: 8,
+                        }}
+                      >
+                        <p
+                          style={{
+                            fontSize: 15,
+                            fontWeight: 700,
+                            color: "#0A0A0A",
+                            margin: 0,
+                            flex: 1,
+                          }}
+                        >
+                          {place.name}
+                        </p>
+                        {(place.dietary?.halal || place.halalStatus) && (
+                          <span
+                            style={{
+                              fontSize: 11,
+                              fontWeight: 700,
+                              color: "#10B981",
+                              background: "#ECFDF5",
+                              padding: "3px 10px",
+                              borderRadius: 99,
+                              flexShrink: 0,
+                              marginLeft: 8,
+                            }}
+                          >
+                            ✅ Halal
+                          </span>
+                        )}
+                      </div>
+                      {place.cuisine && (
+                        <p
+                          style={{
+                            fontSize: 12,
+                            color: "#6B7280",
+                            margin: "0 0 6px",
+                          }}
+                        >
+                          🍴 {place.cuisine}
+                        </p>
+                      )}
+                      {place.distanceText && (
+                        <p
+                          style={{
+                            fontSize: 12,
+                            color: "#9CA3AF",
+                            margin: "0 0 10px",
+                          }}
+                        >
+                          📍 {place.distanceText}
+                        </p>
+                      )}
+                      <div style={{ display: "flex", gap: 12 }}>
+                        <a
+                          href={`https://www.google.com/maps/search/${encodeURIComponent(place.name)}+${place.lat},${place.lng}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            fontSize: 12,
+                            color: "#FF4500",
+                            textDecoration: "none",
+                            fontWeight: 600,
+                          }}
+                        >
+                          View on Map ↗
+                        </a>
+                        <a
+                          href={`https://www.google.com/maps/dir/?api=1&destination=${place.lat},${place.lng}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            fontSize: 12,
+                            color: "#4F46E5",
+                            textDecoration: "none",
+                            fontWeight: 600,
+                          }}
+                        >
+                          Get Directions ↗
+                        </a>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Attractions Near You ────────────────────────────────────────── */}
+      <div style={{ marginBottom: 40 }}>
+        <h2 style={styles.sectionTitle}>🏛️ Attractions Near You</h2>
+        {attractionsLoading ? (
+          <div
+            style={{
+              display: "flex",
+              gap: 16,
+              overflowX: "auto",
+              paddingBottom: 8,
+            }}
+          >
+            {[1, 2, 3, 4].map((i) => (
+              <div
+                key={i}
+                style={{
+                  minWidth: 240,
+                  background: "#fff",
+                  borderRadius: 16,
+                  padding: 20,
+                  boxShadow: cardShadow,
+                  flexShrink: 0,
+                }}
+              >
+                <div style={{ ...styles.skeleton, width: "70%", height: 18 }} />
+                <div
+                  style={{ ...styles.skeleton, width: "40%", marginTop: 10 }}
+                />
+                <div
+                  style={{ ...styles.skeleton, width: "50%", marginTop: 8 }}
+                />
+              </div>
+            ))}
+          </div>
+        ) : attractions.length === 0 ? (
+          <div
+            style={{ ...styles.nearbyCard, textAlign: "center", padding: 32 }}
+          >
+            <p style={{ fontSize: 14, color: "#9CA3AF", margin: 0 }}>
+              No attractions found nearby
+            </p>
+          </div>
+        ) : (
+          <div
+            style={{
+              display: "flex",
+              gap: 16,
+              overflowX: "auto",
+              paddingBottom: 8,
+            }}
+          >
+            {attractions.map((attraction, i) => {
+              const typeBadgeColors = {
+                museum: { bg: "#EEF2FF", color: "#4F46E5" },
+                viewpoint: { bg: "#ECFDF5", color: "#059669" },
+                monument: { bg: "#FEF3C7", color: "#D97706" },
+                castle: { bg: "#FEE2E2", color: "#DC2626" },
+                park: { bg: "#D1FAE5", color: "#065F46" },
+                temple: { bg: "#FFF7ED", color: "#C2410C" },
+                church: { bg: "#F3E8FF", color: "#7C3AED" },
+                mosque: { bg: "#E0F2FE", color: "#0284C7" },
+                ruins: { bg: "#F5F5F4", color: "#78716C" },
+              };
+              const type = (attraction.type || "attraction").toLowerCase();
+              const badge = typeBadgeColors[type] || {
+                bg: "#F3F4F6",
+                color: "#374151",
+              };
+              return (
+                <div
+                  key={i}
+                  style={{
+                    minWidth: 240,
+                    background: "#fff",
+                    borderRadius: 16,
+                    padding: 20,
+                    boxShadow: cardShadow,
+                    flexShrink: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}
+                >
+                  <p
+                    style={{
+                      fontSize: 15,
+                      fontWeight: 700,
+                      color: "#0A0A0A",
+                      margin: 0,
+                    }}
+                  >
+                    {attraction.name}
+                  </p>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 6,
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: badge.color,
+                        background: badge.bg,
+                        padding: "3px 10px",
+                        borderRadius: 99,
+                      }}
+                    >
+                      {type.charAt(0).toUpperCase() + type.slice(1)}
+                    </span>
+                    {attraction.distanceText && (
+                      <span style={{ fontSize: 12, color: "#9CA3AF" }}>
+                        📍 {attraction.distanceText}
+                      </span>
+                    )}
+                  </div>
+                  <a
+                    href={`https://www.google.com/maps/search/${encodeURIComponent(attraction.name)}+${attraction.lat},${attraction.lng}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      fontSize: 12,
+                      color: "#FF4500",
+                      textDecoration: "none",
+                      fontWeight: 600,
+                      marginTop: "auto",
+                    }}
+                  >
+                    View on Map ↗
+                  </a>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ── UNESCO World Heritage Sites ─────────────────────────────────── */}
+      <div style={{ marginBottom: 40 }}>
+        <h2 style={styles.sectionTitle}>
+          🏛️ UNESCO World Heritage Sites Near You
+        </h2>
+        {unescoLoading ? (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+              gap: 20,
+            }}
+          >
+            {[1, 2, 3].map((i) => (
+              <div key={i} style={styles.nearbyCard}>
+                <div style={{ ...styles.skeleton, width: "70%", height: 18 }} />
+                <div
+                  style={{ ...styles.skeleton, width: "90%", marginTop: 12 }}
+                />
+                <div
+                  style={{ ...styles.skeleton, width: "50%", marginTop: 8 }}
+                />
+              </div>
+            ))}
+          </div>
+        ) : unescoSites.length === 0 ? (
+          <div
+            style={{ ...styles.nearbyCard, textAlign: "center", padding: 32 }}
+          >
+            <p style={{ fontSize: 14, color: "#9CA3AF", margin: 0 }}>
+              No UNESCO World Heritage Sites found within 150km of your location
+            </p>
+          </div>
+        ) : (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+              gap: 20,
+            }}
+          >
+            {unescoSites.map((site, i) => (
+              <div
+                key={i}
+                style={{
+                  ...styles.nearbyCard,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                }}
+              >
+                {site.image && (
+                  <div
+                    style={{
+                      borderRadius: 12,
+                      overflow: "hidden",
+                      height: 140,
+                      background: "#f3f4f6",
+                    }}
+                  >
+                    <img
+                      src={site.image}
+                      alt={site.name}
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                      }}
+                    />
+                  </div>
+                )}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <div style={{ flex: 1 }}>
+                    <p
+                      style={{
+                        fontSize: 16,
+                        fontWeight: 700,
+                        color: "#0A0A0A",
+                        margin: 0,
+                      }}
+                    >
+                      🏛️ {site.name}
+                    </p>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 6,
+                        marginTop: 6,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      {site.inscriptionDate && (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: "#D97706",
+                            background: "#FEF3C7",
+                            padding: "3px 10px",
+                            borderRadius: 99,
+                          }}
+                        >
+                          {site.inscriptionDate}
+                        </span>
+                      )}
+                      {site.category && (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: "#4F46E5",
+                            background: "#EEF2FF",
+                            padding: "3px 10px",
+                            borderRadius: 99,
+                          }}
+                        >
+                          {site.category}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {site.distanceText && (
+                    <span
+                      style={{ fontSize: 12, color: "#9CA3AF", flexShrink: 0 }}
+                    >
+                      {site.distanceText}
+                    </span>
+                  )}
+                </div>
+                {site.description && (
+                  <p
+                    style={{
+                      fontSize: 13,
+                      color: "#6B7280",
+                      margin: 0,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {site.description.length > 150
+                      ? site.description.slice(0, 150) + "..."
+                      : site.description}
+                  </p>
+                )}
+                <div style={{ display: "flex", gap: 12, marginTop: "auto" }}>
+                  {site.lat && site.lng && (
+                    <a
+                      href={`https://www.google.com/maps/search/${encodeURIComponent(site.name)}+${site.lat},${site.lng}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        fontSize: 12,
+                        color: "#FF4500",
+                        textDecoration: "none",
+                        fontWeight: 600,
+                      }}
+                    >
+                      View on Map ↗
+                    </a>
+                  )}
+                  {site.unescoId && (
+                    <a
+                      href={`https://whc.unesco.org/en/list/${site.unescoId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        fontSize: 12,
+                        color: "#4F46E5",
+                        textDecoration: "none",
+                        fontWeight: 600,
+                      }}
+                    >
+                      UNESCO Page ↗
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Live Currency Rates ── */}
+      <div style={{ marginBottom: 40 }}>
+        <h2 style={styles.sectionTitle}>💱 Live Currency Rates</h2>
+        {ratesLoading ? (
+          <div style={{ ...styles.nearbyCard, padding: 24 }}>
+            <div style={{ ...styles.skeleton, width: "60%", height: 18 }} />
+            <div style={{ ...styles.skeleton, width: "80%", marginTop: 12 }} />
+            <div style={{ ...styles.skeleton, width: "70%", marginTop: 8 }} />
+            <div style={{ ...styles.skeleton, width: "75%", marginTop: 8 }} />
+          </div>
+        ) : !rates ? (
+          <div
+            style={{ ...styles.nearbyCard, textAlign: "center", padding: 32 }}
+          >
+            <p style={{ fontSize: 14, color: "#9CA3AF", margin: 0 }}>
+              Unable to load currency rates. Try again later.
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* Rate Cards Grid */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+                gap: 16,
+                marginBottom: 24,
+              }}
+            >
+              {[
+                { code: "USD", flag: "🇺🇸" },
+                { code: "AED", flag: "🇦🇪" },
+                { code: "GBP", flag: "🇬🇧" },
+                { code: "EUR", flag: "🇪🇺" },
+                { code: "SAR", flag: "🇸🇦" },
+                { code: "TRY", flag: "🇹🇷" },
+                { code: "INR", flag: "🇮🇳" },
+                { code: "MYR", flag: "🇲🇾" },
+              ].map(({ code, flag }) => {
+                const rate = rates.rates?.[code];
+                return (
+                  <div
+                    key={code}
+                    style={{
+                      background: "#fff",
+                      borderRadius: 16,
+                      padding: "16px 20px",
+                      boxShadow: cardShadow,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <div>
+                      <p
+                        style={{
+                          fontSize: 14,
+                          fontWeight: 600,
+                          color: "#374151",
+                          margin: 0,
+                        }}
+                      >
+                        PKR 100 = {code} {rate ? (100 * rate).toFixed(2) : "—"}
+                      </p>
+                      <p
+                        style={{
+                          fontSize: 12,
+                          color: "#9CA3AF",
+                          margin: "4px 0 0",
+                        }}
+                      >
+                        {code}
+                      </p>
+                    </div>
+                    <span style={{ fontSize: 28 }}>{flag}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Quick Convert Section */}
+            <div
+              style={{
+                background: "#fff",
+                borderRadius: 16,
+                padding: 24,
+                boxShadow: cardShadow,
+              }}
+            >
+              <h3
+                style={{
+                  fontSize: 16,
+                  fontWeight: 700,
+                  color: "#0A0A0A",
+                  margin: "0 0 16px",
+                }}
+              >
+                ⚡ Quick Convert
+              </h3>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 12,
+                  alignItems: "flex-end",
+                }}
+              >
+                {/* Amount Input */}
+                <div style={{ flex: "1 1 140px", minWidth: 120 }}>
+                  <label
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "#6B7280",
+                      display: "block",
+                      marginBottom: 6,
+                    }}
+                  >
+                    Amount
+                  </label>
+                  <input
+                    type="number"
+                    value={convertAmount}
+                    onChange={(e) =>
+                      setConvertAmount(Number(e.target.value) || 0)
+                    }
+                    style={{
+                      width: "100%",
+                      padding: "10px 14px",
+                      border: "1px solid #E5E7EB",
+                      borderRadius: 10,
+                      fontSize: 15,
+                      fontWeight: 600,
+                      color: "#0A0A0A",
+                      outline: "none",
+                      fontFamily: "inherit",
+                      boxSizing: "border-box",
+                    }}
+                  />
+                </div>
+
+                {/* From Currency */}
+                <div style={{ flex: "1 1 120px", minWidth: 100 }}>
+                  <label
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "#6B7280",
+                      display: "block",
+                      marginBottom: 6,
+                    }}
+                  >
+                    From
+                  </label>
+                  <select
+                    value={convertFrom}
+                    onChange={(e) => setConvertFrom(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "10px 14px",
+                      border: "1px solid #E5E7EB",
+                      borderRadius: 10,
+                      fontSize: 14,
+                      fontWeight: 600,
+                      color: "#0A0A0A",
+                      background: "#fff",
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    {[
+                      "PKR",
+                      "USD",
+                      "AED",
+                      "GBP",
+                      "EUR",
+                      "SAR",
+                      "TRY",
+                      "INR",
+                      "MYR",
+                    ].map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Swap arrow */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    paddingBottom: 4,
+                  }}
+                >
+                  <span style={{ fontSize: 20, color: "#9CA3AF" }}>→</span>
+                </div>
+
+                {/* To Currency */}
+                <div style={{ flex: "1 1 120px", minWidth: 100 }}>
+                  <label
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "#6B7280",
+                      display: "block",
+                      marginBottom: 6,
+                    }}
+                  >
+                    To
+                  </label>
+                  <select
+                    value={convertTo}
+                    onChange={(e) => setConvertTo(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "10px 14px",
+                      border: "1px solid #E5E7EB",
+                      borderRadius: 10,
+                      fontSize: 14,
+                      fontWeight: 600,
+                      color: "#0A0A0A",
+                      background: "#fff",
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    {[
+                      "PKR",
+                      "USD",
+                      "AED",
+                      "GBP",
+                      "EUR",
+                      "SAR",
+                      "TRY",
+                      "INR",
+                      "MYR",
+                    ].map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Result */}
+                <div style={{ flex: "1 1 180px", minWidth: 160 }}>
+                  <label
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "#6B7280",
+                      display: "block",
+                      marginBottom: 6,
+                    }}
+                  >
+                    Result
+                  </label>
+                  <div
+                    style={{
+                      padding: "10px 14px",
+                      background: "#F9FAFB",
+                      border: "1px solid #E5E7EB",
+                      borderRadius: 10,
+                      fontSize: 15,
+                      fontWeight: 700,
+                      color: "#FF4500",
+                    }}
+                  >
+                    {(() => {
+                      if (
+                        !rates.rates ||
+                        !rates.rates[convertFrom] ||
+                        !rates.rates[convertTo]
+                      )
+                        return "—";
+                      if (convertFrom === convertTo)
+                        return `${convertAmount.toLocaleString()} ${convertTo}`;
+                      // All rates are relative to PKR (base), so:
+                      // PKR -> X: amount * rates[X]
+                      // X -> PKR: amount / rates[X]
+                      // X -> Y: amount / rates[X] * rates[Y]
+                      const fromRate =
+                        convertFrom === "PKR" ? 1 : rates.rates[convertFrom];
+                      const toRate =
+                        convertTo === "PKR" ? 1 : rates.rates[convertTo];
+                      const result = (convertAmount / fromRate) * toRate;
+                      return `${result.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${convertTo}`;
+                    })()}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Updated timestamp */}
+            <p style={{ fontSize: 12, color: "#9CA3AF", marginTop: 10 }}>
+              {(() => {
+                if (!rates.time_last_update_unix) return "";
+                const mins = Math.round(
+                  (Date.now() / 1000 - rates.time_last_update_unix) / 60,
+                );
+                if (mins < 1) return "Updated: just now";
+                if (mins < 60)
+                  return `Updated: ${mins} minute${mins !== 1 ? "s" : ""} ago`;
+                const hrs = Math.round(mins / 60);
+                return `Updated: ${hrs} hour${hrs !== 1 ? "s" : ""} ago`;
+              })()}
+              {" · "}Source: open.er-api.com · Cached for 1 hour
+            </p>
+          </>
+        )}
+      </div>
+
+      {/* ── Emergency Contacts ── */}
+      {EMERGENCY_CONTACTS[loc.countryCode] && (
+        <div style={{ marginBottom: 40 }}>
+          <h2 style={styles.sectionTitle}>
+            🚨 Emergency Contacts — {EMERGENCY_CONTACTS[loc.countryCode].name}
+          </h2>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+              gap: 16,
+            }}
+          >
+            {(() => {
+              const contacts = EMERGENCY_CONTACTS[loc.countryCode];
+              return [
+                {
+                  emoji: "🚔",
+                  label: "Police",
+                  number: contacts.police,
+                  color: "#3B82F6",
+                },
+                {
+                  emoji: "🚑",
+                  label: "Ambulance",
+                  number: contacts.ambulance,
+                  color: "#EF4444",
+                },
+                {
+                  emoji: "🚒",
+                  label: "Fire",
+                  number: contacts.fire,
+                  color: "#F59E0B",
+                },
+                ...(contacts.tourist && contacts.tourist !== "—"
+                  ? [
+                      {
+                        emoji: "ℹ️",
+                        label: "Tourist Helpline",
+                        number: contacts.tourist,
+                        color: "#10B981",
+                      },
+                    ]
+                  : []),
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    background: "#fff",
+                    borderRadius: 16,
+                    padding: "18px 20px",
+                    boxShadow: cardShadow,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 14,
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: 12,
+                      background: `${item.color}15`,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 22,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {item.emoji}
+                  </div>
+                  <div>
+                    <p
+                      style={{
+                        fontSize: 13,
+                        color: "#6B7280",
+                        margin: 0,
+                        fontWeight: 500,
+                      }}
+                    >
+                      {item.label}
+                    </p>
+                    <a
+                      href={`tel:${item.number}`}
+                      style={{
+                        fontSize: 20,
+                        fontWeight: 800,
+                        color: item.color,
+                        textDecoration: "none",
+                        display: "block",
+                        marginTop: 2,
+                      }}
+                    >
+                      {item.number}
+                    </a>
+                  </div>
+                </div>
+              ));
+            })()}
+          </div>
+          <p style={{ fontSize: 12, color: "#9CA3AF", marginTop: 8 }}>
+            📍 Based on your detected location: {loc.city},{" "}
+            {EMERGENCY_CONTACTS[loc.countryCode].name}
+          </p>
+        </div>
+      )}
+
+      {/* ── Main content: Recent Trips + Quick Actions ──────────────────── */}
+      <div style={styles.mainGrid} data-dashboard-main="">
+        {/* Recent Trips */}
+        <div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 20,
+            }}
+          >
+            <h2 style={{ ...styles.sectionTitle, margin: 0 }}>Recent Trips</h2>
+            <button
+              style={{
+                ...styles.btnOutline,
+                border: "none",
+                color: "#FF4500",
+                background: "transparent",
+              }}
+              onClick={() => router.push("/trips")}
+            >
+              View All
+            </button>
+          </div>
+
+          {loading ? (
+            <p style={{ color: "#9CA3AF", textAlign: "center", padding: 32 }}>
+              Loading trips…
+            </p>
+          ) : recentTrips.length === 0 ? (
+            <div style={styles.emptyTrips}>
+              <MapPin
+                size={48}
+                color="#D1D5DB"
+                style={{ margin: "0 auto 12px" }}
+              />
+              <p style={{ color: "#6B7280", marginBottom: 16 }}>
+                No trips yet. Start planning your first adventure!
+              </p>
+              <button
+                style={styles.btnPrimary}
+                onClick={() => router.push("/chat")}
+              >
+                <Plus size={16} /> Plan a Trip with AI
+              </button>
+            </div>
+          ) : (
+            recentTrips.map((trip) => (
+              <div key={trip._id} style={styles.tripCard}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <div>
+                    <h3 style={styles.tripTitle}>{trip.title}</h3>
+                    <div style={styles.tripDest}>
+                      <MapPin size={14} /> {trip.destination}
+                    </div>
+                    <div>
+                      <span
+                        style={styles.badge(
+                          trip.status === "active"
+                            ? "#E8F5E9"
+                            : trip.status === "planned"
+                              ? "#FFF5F0"
+                              : "#F5F5F5",
+                          trip.status === "active"
+                            ? "#22C55E"
+                            : trip.status === "planned"
+                              ? "#FF4500"
+                              : "#374151",
+                        )}
+                      >
+                        {trip.status}
+                      </span>
+                      {trip.aiGenerated && (
+                        <span style={styles.badge("#FFF3E0", "#F59E0B")}>
+                          AI Generated
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    style={styles.btnOutline}
+                    onClick={() => router.push(`/trips/${trip._id}`)}
+                  >
+                    View Details
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Quick Actions */}
+        <div>
+          <h2 style={{ ...styles.sectionTitle, marginBottom: 16 }}>
+            Quick Actions
+          </h2>
+
+          <button
+            style={styles.quickAction}
+            onClick={() => router.push("/chat")}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.borderColor = "#FF4500")
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.borderColor = "#E5E7EB")
+            }
+          >
+            <div style={styles.qaIcon("#FFF5F0")}>
+              <MessageSquare size={20} color="#FF4500" />
+            </div>
+            <div>
+              <p style={styles.qaTitle}>Start AI Chat</p>
+              <p style={styles.qaSub}>Plan your next adventure</p>
+            </div>
+          </button>
+
+          <button
+            style={styles.quickAction}
+            onClick={() => router.push("/destinations")}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.borderColor = "#0284C7")
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.borderColor = "#E5E7EB")
+            }
+          >
+            <div style={styles.qaIcon("#E0F2FE")}>
+              <Globe size={20} color="#0284C7" />
+            </div>
+            <div>
+              <p style={styles.qaTitle}>Explore Destinations</p>
+              <p style={styles.qaSub}>Discover new places</p>
+            </div>
+          </button>
+
+          <button
+            style={styles.quickAction}
+            onClick={() => router.push("/trips")}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.borderColor = "#F59E0B")
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.borderColor = "#E5E7EB")
+            }
+          >
+            <div style={styles.qaIcon("#FFF3E0")}>
+              <Calendar size={20} color="#F59E0B" />
+            </div>
+            <div>
+              <p style={styles.qaTitle}>My Trips</p>
+              <p style={styles.qaSub}>View all itineraries</p>
+            </div>
+          </button>
+
+          <button
+            style={styles.quickAction}
+            onClick={() => router.push("/settings")}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.borderColor = "#D1D5DB")
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.borderColor = "#E5E7EB")
+            }
+          >
+            <div style={styles.qaIcon("#F5F5F5")}>
+              <Settings size={20} color="#6B7280" />
+            </div>
+            <div>
+              <p style={styles.qaTitle}>Settings</p>
+              <p style={styles.qaSub}>Manage your account</p>
+            </div>
+          </button>
+
+          {/* Travel Tip */}
+          <div
+            style={{
+              marginTop: 28,
+              padding: 20,
+              background: "linear-gradient(135deg, #FFF5F0, #FFF9F5)",
+              borderRadius: 16,
+              border: "1px solid #FFE0CC",
+            }}
+          >
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+              <div
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 8,
+                  background: "#fff",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                }}
+              >
+                <TrendingUp size={20} color="#FF4500" />
+              </div>
+              <div>
+                <h3
+                  style={{
+                    fontWeight: 600,
+                    color: "#0A0A0A",
+                    margin: "0 0 6px",
+                    fontSize: 15,
+                  }}
+                >
+                  Travel Tip
+                </h3>
+                <p
+                  style={{
+                    fontSize: 13,
+                    color: "#374151",
+                    margin: 0,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Book flights 6-8 weeks in advance for the best deals! Our AI
+                  can help you find the perfect timing.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Responsive overrides */}
+      <style>{`
+        @media (max-width: 900px) {
+          /* stack main grid on tablet/mobile */
+        }
+        @media (max-width: 768px) {
+          [data-dashboard-main] {
+            grid-template-columns: 1fr !important;
+          }
+        }
+      `}</style>
+    </div>
+  );
+}
